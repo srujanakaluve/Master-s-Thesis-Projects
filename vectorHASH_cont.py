@@ -1,7 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
-
-# Helper functions
 
 def sign(x):
     """
@@ -16,59 +13,23 @@ def relu(x):
     """Relu function vectorized"""
     return np.where(x > 0, x, 0)
 
-def get_mutual_info(state, pattern):
-    """Returns mutual information between two states, vectorized"""
-    m = np.array(get_overlap(state, pattern))
-    a, b = (1 + m)/2, (1 - m)/2
-    s = a * np.log2(np.where(a > 0, a, 1)) + b* np.log2(np.where(b > 0, b, 1))
-    return 1 + s
-
-def get_overlap(state, pattern):
-    """Returns overlap between two states, vectorized"""
-    return np.mean(state * pattern, axis=0)
-
-# vectorHASH specific functions
-
-def grid_CAN(g, lambdas):
+def gridtogrid(exc, inh, lambdas):
     """
-    Module-wise top-k non-linearity
-    g: Can be 1d array activity vector or a matrix of activity vectors
-    lambdas: list of grid periods
+    Makes the weight matrix for grid CAN dynamics with self excitation and lateral inhibition
     """
-
-    if g.ndim == 1:
-        g = g[:, None]
-
-    Ng, ncols = g.shape
-    g_out = np.zeros_like(g)
+    lambdas = np.asarray(lambdas)
+    Ng = np.sum(lambdas*lambdas)
+    W_gg = np.zeros((Ng, Ng))
     i = 0
+
     for lam in lambdas:
         size = lam**2
-        module = g[i:i+size, :]  # shape (size, ncols)
-        winners = np.argmax(module, axis=0)  # shape (ncols,)
-        rows = i + winners
-        g_out[rows, np.arange(ncols)] = 1
+        W_gg[i:i+size, i:i+size] = inh
         i += size
 
-    if g.ndim == 1:
-        return g_out[:, 0]
-    return g_out
+    np.fill_diagonal(W_gg, exc)
+    return W_gg
 
-def generate_grid(lambda_sq):
-    """
-    Makes a matrix of all possible grid states accounting for modules
-    lambda_sq: squared list of lambdas (grid periods). Each element is the total number of units within that module
-    """
-    Ng = np.sum(lambda_sq)
-    patts_total = np.prod(lambda_sq)
-    grid = np.zeros((Ng, patts_total))
-    jumps = [0] +list(np.cumsum(lambda_sq))[:-1]
-
-    for i in range(patts_total):
-        a = np.mod(i, lambda_sq)
-        grid[a+jumps, i] = 1
-
-    return grid
 
 def scaffold_layers(Ng, Nh, Npatts, lambdas, gamma, theta=0.5):
     """
@@ -110,6 +71,22 @@ def scaffold_layers(Ng, Nh, Npatts, lambdas, gamma, theta=0.5):
 
     return grid, W_hg, hc, W_gh
 
+def generate_grid(lambda_sq):
+    """
+    Makes a matrix of all possible grid states accounting for modules
+    lambda_sq: squared list of lambdas (grid periods). Each element is the total number of units within that module
+    """
+    Ng = np.sum(lambda_sq)
+    patts_total = np.prod(lambda_sq)
+    grid = np.zeros((Ng, patts_total))
+    jumps = [0] +list(np.cumsum(lambda_sq))[:-1]
+
+    for i in range(patts_total):
+        a = np.mod(i, lambda_sq)
+        grid[a+jumps, i] = 1
+
+    return grid
+
 def sensory_weights(sensory, hc):
     """
     Makes the weight matrices from sensory to hc layer using pseudoinverse
@@ -130,23 +107,3 @@ def sensory_weights(sensory, hc):
     W_sh = sensory @ np.linalg.pinv(hc_till_Npatts)
 
     return W_hs, W_sh
-
-def recall(s_cued, W_hs, W_sh, W_gh, W_hg, lambdas, theta=0.5, Niter=5):
-    """
-    Runs the recall dynamics from sensory-hc-grid and back
-    s_cued: input pattern in sensory layer - can be a single pattern or a matrix of patterns
-    theta: bias for hc layer
-    Niter: number of grid-grid iterations to run
-
-    Returns s_recalledc: (hopefully) correct sensory patterns recalled
-    """
-
-    h = relu(W_hs @ s_cued - theta)
-
-    for _ in range(Niter):
-        g = grid_CAN(W_gh @ h, lambdas)
-        h = relu(W_hg @ g - theta)
-
-    s_recalled = np.sign(W_sh @ h)
-    return s_recalled
-

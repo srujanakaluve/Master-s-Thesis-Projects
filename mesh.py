@@ -5,14 +5,12 @@ from itertools import combinations
 
 
 def sign(x):
-
+    """
+    Implements the sign function.
+    x can be a scalar, 1d list or any dimensional np array.
+    """
     y = np.sign(x)
-
-    if type(x) == int or type(x) == float:
-        y = 1 if y == 0 else y
-        return y
-    else:  #should be list or np array
-        y[y == 0] = 1
+    y = np.where(y == 0, 1, y)
     return y
 
 
