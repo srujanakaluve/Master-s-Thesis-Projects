@@ -1,18 +1,5 @@
 import numpy as np
-
-def sign(x):
-    """
-    Implements the sign function.
-    x can be a scalar, 1d list or any dimensional np array.
-    """
-    y = np.sign(x)
-    y = np.where(y == 0, 1, y)
-    return y
-
-def relu(x):
-    """Relu function vectorized"""
-    return np.where(x > 0, x, 0)
-
+from helpers import relu, tanh, softmax, 
 def gridtogrid(exc, inh, lambdas):
     """
     Makes the weight matrix for grid CAN dynamics with self excitation and lateral inhibition
@@ -107,3 +94,12 @@ def sensory_weights(sensory, hc):
     W_sh = sensory @ np.linalg.pinv(hc_till_Npatts)
 
     return W_hs, W_sh
+
+def scaffold(t, state, Ng, Nh, W_gg, W_hg, W_gh, lambdas, b, tau_g, tau_h, beta=10):
+    g = state[:Ng]
+    h = state[Ng:]
+
+    dg = (-g + softmax(W_gg @ g + 1*W_gh @ h, lambdas, beta)) / tau_g
+    dh = (-h + relu(W_hg @ g - b)) / tau_h
+
+    return np.concatenate([dg, dh])
