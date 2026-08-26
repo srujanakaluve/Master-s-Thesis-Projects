@@ -1,5 +1,6 @@
 import numpy as np
-from helpers import relu, tanh, softmax, 
+from helpers import relu, tanh, softmax, glob_inh
+
 def gridtogrid(exc, inh, lambdas):
     """
     Makes the weight matrix for grid CAN dynamics with self excitation and lateral inhibition
@@ -27,7 +28,7 @@ def scaffold_layers(Ng, Nh, Npatts, lambdas, gamma, theta=0.5):
     Nh: Number of hippocampal units
     Npatts: Number of patterns, should be total number of patterns = product of lambdas squared
     lambdas: list of grid periods
-    gamma: sparsity
+    gamma: connection probability
     theta: bias 
 
     Returns
@@ -103,3 +104,14 @@ def scaffold(t, state, Ng, Nh, W_gg, W_hg, W_gh, lambdas, b, tau_g, tau_h, beta=
     dh = (-h + relu(W_hg @ g - b)) / tau_h
 
     return np.concatenate([dg, dh])
+
+def vectorhash(t, state, Ng, Nh, W_gg, W_hg, W_gh, W_hs, W_sh, lambdas, b, tau_g, tau_h, tau_s, beta=10):
+    g = state[:Ng]
+    h = state[Ng : Ng+Nh]
+    s = state[Ng+Nh:]
+
+    dg = (-g + softmax(W_gg @ g + 1*W_gh @ h, lambdas, beta)) / tau_g
+    dh = (-h + relu(W_hg @ g + W_hs @ s - b)) / tau_h
+    ds = (-s + tanh(W_sh @ h, beta)) / tau_s
+
+    return np.concatenate([dg, dh, ds])

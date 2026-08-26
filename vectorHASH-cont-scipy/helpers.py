@@ -8,9 +8,7 @@ def tanh(x, beta):
     return np.tanh(beta * x)
 
 def softmax(x, lambdas, beta=10):
-    x1 = x.copy
-    if x.ndim == 1:
-        x1 = x[:, None]
+    x1 = x[:, None] if x.ndim==1 else x
 
     lambdas = np.asarray(lambdas)
     y = np.zeros_like(x1)
@@ -20,6 +18,24 @@ def softmax(x, lambdas, beta=10):
         module = x1[i:i+size, :]
         exp = np.exp(beta * module)
         y[i:i+size, :] = exp / np.sum(exp, axis=0, keepdims=True)
+        i += size
+
+    return y[:,0] if x.ndim==1 else y
+
+def glob_inh(x, lambdas, inh_stength):
+    x1 = x.copy()
+    if x.ndim == 1:
+        x1 = x[:, None]
+
+    lambdas = np.asarray(lambdas)
+    y = np.zeros_like(x1)
+    i = 0
+    for lam in lambdas:
+        size = lam**2
+        module = x1[i:i+size, :]
+        module_pos = np.where(module > 0, module, 0)
+        sq_activity = module_pos*module_pos
+        y[i:i+size, :] = sq_activity / (1 + inh_stength * np.sum(sq_activity, axis=0, keepdims=True))
         i += size
 
     if x.ndim == 1:
