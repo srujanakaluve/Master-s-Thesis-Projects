@@ -17,10 +17,59 @@ def softmax(x, lambdas, beta=10.0):
 
     return jnp.concatenate(out)
 
+def glob_inh(x, lambdas, inh_strength=1):
+    x = jnp.asarray(x)
+    was_1d = x.ndim == 1
+    if was_1d:
+        x = x[:, None]
+
+    lambdas = tuple(int(l) for l in lambdas)
+    outputs = []
+    start = 0
+
+    for lam in lambdas:
+        size = lam ** 2
+        module = x[start:start + size, :]
+        module_pos = jnp.where(module > 0, module, 0)
+        sq_activity = module_pos * module_pos
+        denominator = 1 + inh_strength * jnp.sum(
+            sq_activity, axis=0, keepdims=True
+        )
+        outputs.append(sq_activity / denominator)
+        start += size
+
+    y = jnp.concatenate(outputs, axis=0)
+    if was_1d:
+        return y[:, 0]
+    return y
+
+def gg_space(Ng, lambdas, exc_range, inh_range, file_path=None):
+    """run this once and store in a file"""
+
+    exc_range = np.asarray(exc_range)
+    inh_range = np.asarray(inh_range)
+    matrices = np.empty((len(exc_range), len(inh_range), Ng, Ng))
+
+    for exc_idx, exc in enumerate(exc_range):
+        for inh_idx, inh in enumerate(inh_range):
+            matrix = np.zeros((Ng, Ng))
+            i = 0
+            for lam in lambdas:
+                size = lam ** 2
+                matrix[i:i + size, i:i + size] = inh
+                i += size
+            np.fill_diagonal(matrix, exc)
+            matrices[exc_idx, inh_idx] = matrix
+
+    if file_path is not None:
+        np.save(file_path, matrices)
+
+    return matrices
+
 class Scaffold:
 
     def __init__(self, Nh, lambdas, gg_exc, gg_inh, gamma=0, b=0.5,
-                 tau_g=1., tau_h=1., beta=10., dt=0.1):
+                 tau_g=1., tau_h=1., beta=10., dt=0.1, gg_default=True, W_gg=None):
         self.lambdas = tuple(int(l) for l in lambdas)
         self.Ng, self.Nh = sum(l * l for l in self.lambdas), Nh
         self.patts_total = np.prod([l * l for l in self.lambdas])
@@ -31,7 +80,11 @@ class Scaffold:
         self.beta = beta
         self.dt = dt
 
-        self.W_gg = self.gridtogrid()
+        if gg_default:
+            self.W_gg = self.gridtogrid()
+        elif gg_default==False and W_gg is not None:
+            self.W_gg = W_gg
+
         self.grid, self.W_hg, self.hc, self.W_gh = self.scaffold_layers()
 
         self.weights = {
@@ -98,7 +151,7 @@ class Scaffold:
             g, h = state
 
             def derivative(g_t, h_t):
-                dg = (-g_t + softmax(weights['W_gg'] @ g_t + weights['W_gh'] @ h_t, lambdas)) / tau_g
+                dg = (-g_t + glob_inh(weights['W_gg'] @ g_t + weights['W_gh'] @ h_t, lambdas)) / tau_g
                 dh = (-h_t + jax.nn.relu(weights['W_hg'] @ g_t - b)) / tau_h
                 return dg, dh
 
@@ -111,7 +164,7 @@ class Scaffold:
 
             return(g_next, h_next), None
 
-        final_state, _ = jax.lax.scan(rk4_step, state0, None, length=100)
+        final_state, _ = jax.lax.scan(rk4_step, state0, None, length=500)
         return final_state
 
     def run(self, g0, h0):
@@ -129,11 +182,16 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     lambdas = np.array([3,4,5])
-    scaffold = Scaffold(400, lambdas, 1.5, -0.5, dt=0.1)
+    scaffold = Scaffold(400, lambdas, 20, -3, dt=0.1)
     h0 = scaffold.hc
     g0 = scaffold.grid
+    final = scaffold.run(g0, h0)
 
-    mean_hc_norm = np.mean(np.linalg.norm(h0, axis=0))
+    n_correct = sum(np.allclose(final[1][:, p], h0[:, p], atol=1e-1) for p in range(3600))
+    print(n_correct)
+    print(final[0][:,0])
+
+"""    mean_hc_norm = np.mean(np.linalg.norm(h0, axis=0))
     noise_vals = np.arange(0, 10, 0.5)
     runs = 50
     correct = np.zeros((runs, len(noise_vals), scaffold.patts_total))
@@ -157,4 +215,4 @@ if __name__ == "__main__":
     plt.plot(noise_vals, correct_avg.mean(axis=1),'k',lw=2.)
     plt.xlabel(r'|noise|/|hpc|')
     plt.ylabel('p(correct)')
-    plt.show()
+    plt.show()"""
