@@ -2,97 +2,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from functools import partial
-
-def softmax(x, lambdas, beta=10.0):
-    x = jnp.asarray(x)
-    was_1d = x.ndim == 1
-    if was_1d:
-        x = x[:, None]
-
-    lambdas = tuple(int(l) for l in lambdas)
-    out = []
-    start = 0
-
-    for lam in lambdas:
-        size = int(lam ** 2)
-        block = x[start:start + size]
-        out.append(jax.nn.softmax(beta * block, axis=0))
-        start += size
-
-    y = jnp.concatenate(out, axis=0)
-    if was_1d:
-        return y[:, 0]
-    return y
-
-def sigmoid(x, lambdas, beta=10):
-    x = jnp.asarray(x)
-    was_1d = x.ndim == 1
-    if was_1d:
-        x = x[:, None]
-
-    lambdas = tuple(int(l) for l in lambdas)
-    outputs = []
-    start = 0
-
-    for lam in lambdas:
-        size = lam ** 2
-        module = x[start:start + size, :]
-        outputs.append(jax.nn.sigmoid(beta * module))
-        start += size
-
-    y = jnp.concatenate(outputs, axis=0)
-    if was_1d:
-        return y[:, 0]
-    return y
-
-def glob_inh(x, lambdas, inh_strength=1):
-    x = jnp.asarray(x)
-    was_1d = x.ndim == 1
-    if was_1d:
-        x = x[:, None]
-
-    lambdas = tuple(int(l) for l in lambdas)
-    outputs = []
-    start = 0
-
-    for lam in lambdas:
-        size = lam ** 2
-        module = x[start:start + size, :]
-        module_pos = jnp.where(module > 0, module, 0)
-        sq_activity = module_pos * module_pos
-        denominator = 1 + inh_strength * jnp.sum(
-            sq_activity, axis=0, keepdims=True
-        )
-        outputs.append(sq_activity / denominator)
-        start += size
-
-    y = jnp.concatenate(outputs, axis=0)
-    if was_1d:
-        return y[:, 0]
-    return y
-
-def gg_space(Ng, lambdas, exc_range, inh_range, file_path=None):
-    """run this once and store in a file"""
-
-    exc_range = np.asarray(exc_range)
-    inh_range = np.asarray(inh_range)
-    matrices = np.empty((len(exc_range), len(inh_range), Ng, Ng))
-
-    for exc_idx, exc in enumerate(exc_range):
-        for inh_idx, inh in enumerate(inh_range):
-            matrix = np.zeros((Ng, Ng))
-            i = 0
-            for lam in lambdas:
-                size = lam ** 2
-                matrix[i:i + size, i:i + size] = inh
-                i += size
-            np.fill_diagonal(matrix, exc)
-            matrices[exc_idx, inh_idx] = matrix
-
-    if file_path is not None:
-        np.save(file_path, matrices)
-
-    return matrices
+from jax_helpers import sigmoid, glob_inh, softmax
 
 class Grid:
 
@@ -176,6 +86,7 @@ class Grid:
 
     def run(self, g0):
             return self.simulate_run(jnp.array(g0), self.weights, self.lambdas, self.tau_g, self.activation, dt=self.dt)
+
 
 if __name__ == "__main__":
     from tqdm import tqdm

@@ -2,36 +2,33 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from functools import partial
-
-def softmax(x, lambdas, beta=10.0):
-    x = jnp.asarray(x)
-    lambdas = tuple(int(l) for l in lambdas)
-
-    out = []
-    start = 0
-    for lam in lambdas:
-        size = int(lam ** 2)
-        block = x[start:start + size]
-        out.append(jax.nn.softmax(beta * block, axis=0))
-        start += size
-
-    return jnp.concatenate(out)
+from jax_helpers import sigmoid, glob_inh, softmax
 
 class Scaffold:
 
-    def __init__(self, Nh, lambdas, gg_exc, gg_inh, gamma=0, b=0.5,
-                 tau_g=1., tau_h=1., beta=10., dt=0.1):
+    def __init__(self, Nh, lambdas, activation, gg_exc=None, gg_inh=None, gamma=0, b=0.5,
+                 tau_g=1., tau_h=1., dt=0.1, gg_default=True, W_gg=None):
         self.lambdas = tuple(int(l) for l in lambdas)
         self.Ng, self.Nh = sum(l * l for l in self.lambdas), Nh
         self.patts_total = np.prod([l * l for l in self.lambdas])
-        self.gg_exc, self.gg_inh = gg_exc, gg_inh
+        if gg_exc is not None and gg_inh is not None:
+            self.gg_exc, self.gg_inh = gg_exc, gg_inh
         self.b = b
         self.gamma = gamma
         self.tau_g, self.tau_h = tau_g, tau_h
-        self.beta = beta
         self.dt = dt
 
-        self.W_gg = self.gridtogrid()
+        if gg_default:
+            self.W_gg = self.gridtogrid()
+        elif gg_default is False and W_gg is not None:
+            self.W_gg = W_gg
+
+        if activation=='softmax':
+            self.activation = softmax
+        if activation=='glob_inh':
+            self.activation = glob_inh
+        if activation=='sigmoid':
+            self.activation = sigmoid
         self.grid, self.W_hg, self.hc, self.W_gh = self.scaffold_layers()
 
         self.weights = {
@@ -90,15 +87,15 @@ class Scaffold:
         return grid, W_hg, hc, W_gh
 
     @staticmethod
-    @partial(jax.jit, static_argnames=("lambdas",))
-    def simulate(g0, h0, weights, lambdas, b, tau_g, tau_h, dt=0.1):
+    @partial(jax.jit, static_argnames=("lambdas", "activation"))
+    def simulate_run(g0, h0, weights, lambdas, b, tau_g, tau_h, activation, dt=0.1):
         state0 = (g0, h0)
 
         def rk4_step(state, _):
             g, h = state
 
             def derivative(g_t, h_t):
-                dg = (-g_t + softmax(weights['W_gg'] @ g_t + weights['W_gh'] @ h_t, lambdas)) / tau_g
+                dg = (-g_t + activation(weights['W_gg'] @ g_t + weights['W_gh'] @ h_t, lambdas)) / tau_g
                 dh = (-h_t + jax.nn.relu(weights['W_hg'] @ g_t - b)) / tau_h
                 return dg, dh
 
@@ -111,39 +108,44 @@ class Scaffold:
 
             return(g_next, h_next), None
 
-        final_state, _ = jax.lax.scan(rk4_step, state0, None, length=100)
+        final_state, _ = jax.lax.scan(rk4_step, state0, None, length=250)
         return final_state
 
     def run(self, g0, h0):
             return self.simulate_run(jnp.array(g0),
                 jnp.array(h0), self.weights, self.lambdas, self.b, self.tau_g,
-                self.tau_h, dt=self.dt)
+                self.tau_h, self.activation, dt=self.dt)
 
-    @jax.jit
-    def noisy_batch(key_step, h0, Nh, mean_hc_norm):
-        raw_noise = jax.random.normal(key_step, shape=(len(noise_vals), *h0.shape))
-        scaled_noise = raw_noise / jnp.sqrt(Nh)
-
-        noise_grid = noise_vals[:, None, None]
-        h0_noisy_batch = h0[None, :, :] + noise_grid * scaled_noise * mean_hc_norm
-        return h0_noisy_batch
+    def run_and_error(self, g0, h0):
+        final_state = self.simulate_run(g0, h0, self.weights, self.lambdas, self.b, self.tau_g, self.tau_h, dt=self.dt)
+        error = jnp.linalg.norm(final_state[1] - h0, axis=0)
+        return error
 
 if __name__ == "__main__":
     from tqdm import tqdm
     import matplotlib.pyplot as plt
 
     lambdas = np.array([3,4,5])
-    scaffold = Scaffold(400, lambdas, 1.5, -0.5, dt=0.1)
+    gg = np.load('/home/srujana/VSCode Projects/Thesis/vectorHASH-cont-jax/g2g_space.npy')
+    scaffold = Scaffold(400, lambdas, 'glob_inh', gamma=0.6, gg_default=False, W_gg=gg[40, 40, :, :])
     h0 = scaffold.hc
-    g0 = scaffold.grid
+    g0 = jnp.zeros_like(scaffold.grid)
+    final = scaffold.run(g0, h0)
 
-    mean_hc_norm = np.mean(np.linalg.norm(h0, axis=0))
+    n_correct = sum(np.allclose(final[0][:, p], scaffold.grid[:, p], atol=1e-1) for p in range(3600))
+    """plt.imshow(n_correct, aspect='auto')
+    plt.colorbar()
+    plt.show()"""
+    print(n_correct)
+    print(final[0][:,0])
+    print(gg[40, 40, :, :])
+    
+
+"""    mean_hc_norm = np.mean(np.linalg.norm(h0, axis=0))
     noise_vals = np.arange(0, 10, 0.5)
     runs = 50
     correct = np.zeros((runs, len(noise_vals), scaffold.patts_total))
 
-
-    rng_key = jax.random.PRNGKey(42)
     for i in tqdm(range(runs)):
         for nidx, noise_val in enumerate(noise_vals):
             noise = np.random.normal(0, 1, h0.shape) / np.sqrt(scaffold.Nh)
@@ -163,4 +165,4 @@ if __name__ == "__main__":
     plt.plot(noise_vals, correct_avg.mean(axis=1),'k',lw=2.)
     plt.xlabel(r'|noise|/|hpc|')
     plt.ylabel('p(correct)')
-    plt.show()
+    plt.show()"""

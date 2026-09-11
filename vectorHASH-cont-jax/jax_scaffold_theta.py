@@ -2,89 +2,33 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from functools import partial
-
-def softmax(x, lambdas, beta=10.0):
-    x = jnp.asarray(x)
-    lambdas = tuple(int(l) for l in lambdas)
-
-    out = []
-    start = 0
-    for lam in lambdas:
-        size = int(lam ** 2)
-        block = x[start:start + size]
-        out.append(jax.nn.softmax(beta * block, axis=0))
-        start += size
-
-    return jnp.concatenate(out)
-
-def glob_inh(x, lambdas, inh_strength=1):
-    x = jnp.asarray(x)
-    was_1d = x.ndim == 1
-    if was_1d:
-        x = x[:, None]
-
-    lambdas = tuple(int(l) for l in lambdas)
-    outputs = []
-    start = 0
-
-    for lam in lambdas:
-        size = lam ** 2
-        module = x[start:start + size, :]
-        module_pos = jnp.where(module > 0, module, 0)
-        sq_activity = module_pos * module_pos
-        denominator = 1 + inh_strength * jnp.sum(
-            sq_activity, axis=0, keepdims=True
-        )
-        outputs.append(sq_activity / denominator)
-        start += size
-
-    y = jnp.concatenate(outputs, axis=0)
-    if was_1d:
-        return y[:, 0]
-    return y
-
-def gg_space(Ng, lambdas, exc_range, inh_range, file_path=None):
-    """run this once and store in a file"""
-
-    exc_range = np.asarray(exc_range)
-    inh_range = np.asarray(inh_range)
-    matrices = np.empty((len(exc_range), len(inh_range), Ng, Ng))
-
-    for exc_idx, exc in enumerate(exc_range):
-        for inh_idx, inh in enumerate(inh_range):
-            matrix = np.zeros((Ng, Ng))
-            i = 0
-            for lam in lambdas:
-                size = lam ** 2
-                matrix[i:i + size, i:i + size] = inh
-                i += size
-            np.fill_diagonal(matrix, exc)
-            matrices[exc_idx, inh_idx] = matrix
-
-    if file_path is not None:
-        np.save(file_path, matrices)
-
-    return matrices
+from jax_helpers import sigmoid, glob_inh, softmax
 
 class Scaffold:
 
-    def __init__(self, Nh, lambdas, gg_exc, gg_inh, gamma=0, b=0.5,
-                 tau_g=1., tau_h=1., beta=10., dt=0.1, gg_default=True, W_gg=None):
+    def __init__(self, Nh, lambdas, activation, gg_exc=None, gg_inh=None, gamma=0, b=0.5,
+                 tau_g=1., tau_h=1., dt=0.1, gg_default=True, W_gg=None):
         self.lambdas = tuple(int(l) for l in lambdas)
         self.Ng, self.Nh = sum(l * l for l in self.lambdas), Nh
         self.patts_total = np.prod([l * l for l in self.lambdas])
-        self.gg_exc, self.gg_inh = gg_exc, gg_inh
+        if gg_exc is not None and gg_inh is not None:
+            self.gg_exc, self.gg_inh = gg_exc, gg_inh
         self.b = b
         self.gamma = gamma
         self.tau_g, self.tau_h = tau_g, tau_h
-        self.beta = beta
         self.dt = dt
 
         if gg_default:
             self.W_gg = self.gridtogrid()
-        elif gg_default==False and W_gg is not None:
+        elif gg_default is False and W_gg is not None:
             self.W_gg = W_gg
 
+        if activation=='softmax':
+            self.activation = softmax
+        if activation=='glob_inh':
+            self.activation = glob_inh
+        if activation=='sigmoid':
+            self.activation = sigmoid
         self.grid, self.W_hg, self.hc, self.W_gh = self.scaffold_layers()
 
         self.weights = {
@@ -143,15 +87,15 @@ class Scaffold:
         return grid, W_hg, hc, W_gh
 
     @staticmethod
-    @partial(jax.jit, static_argnames=("lambdas",))
-    def simulate_run(g0, h0, weights, lambdas, b, tau_g, tau_h, dt=0.1):
+    @partial(jax.jit, static_argnames=("lambdas", "activation"))
+    def simulate_run(g0, h0, weights, lambdas, b, tau_g, tau_h, activation, dt=0.1):
         state0 = (g0, h0)
 
         def rk4_step(state, _):
             g, h = state
 
             def derivative(g_t, h_t):
-                dg = (-g_t + glob_inh(weights['W_gg'] @ g_t + weights['W_gh'] @ h_t, lambdas)) / tau_g
+                dg = (-g_t + activation(weights['W_gg'] @ g_t + weights['W_gh'] @ h_t, lambdas)) / tau_g
                 dh = (-h_t + jax.nn.relu(weights['W_hg'] @ g_t - b)) / tau_h
                 return dg, dh
 
@@ -164,13 +108,13 @@ class Scaffold:
 
             return(g_next, h_next), None
 
-        final_state, _ = jax.lax.scan(rk4_step, state0, None, length=500)
+        final_state, _ = jax.lax.scan(rk4_step, state0, None, length=250)
         return final_state
 
     def run(self, g0, h0):
             return self.simulate_run(jnp.array(g0),
                 jnp.array(h0), self.weights, self.lambdas, self.b, self.tau_g,
-                self.tau_h, dt=self.dt)
+                self.tau_h, self.activation, dt=self.dt)
 
     def run_and_error(self, g0, h0):
         final_state = self.simulate_run(g0, h0, self.weights, self.lambdas, self.b, self.tau_g, self.tau_h, dt=self.dt)
@@ -182,14 +126,20 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     lambdas = np.array([3,4,5])
-    scaffold = Scaffold(400, lambdas, 20, -3, dt=0.1)
+    gg = np.load('/home/srujana/VSCode Projects/Thesis/vectorHASH-cont-jax/g2g_space.npy')
+    scaffold = Scaffold(400, lambdas, 'glob_inh', gamma=0.6, gg_default=False, W_gg=gg[40, 40, :, :])
     h0 = scaffold.hc
-    g0 = scaffold.grid
+    g0 = jnp.zeros_like(scaffold.grid)
     final = scaffold.run(g0, h0)
 
-    n_correct = sum(np.allclose(final[1][:, p], h0[:, p], atol=1e-1) for p in range(3600))
+    n_correct = sum(np.allclose(final[0][:, p], scaffold.grid[:, p], atol=1e-1) for p in range(3600))
+    """plt.imshow(n_correct, aspect='auto')
+    plt.colorbar()
+    plt.show()"""
     print(n_correct)
     print(final[0][:,0])
+    print(gg[40, 40, :, :])
+    
 
 """    mean_hc_norm = np.mean(np.linalg.norm(h0, axis=0))
     noise_vals = np.arange(0, 10, 0.5)
