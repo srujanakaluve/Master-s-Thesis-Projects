@@ -127,18 +127,20 @@ if __name__ == "__main__":
 
     lambdas = np.array([3,4,5])
     gg = np.load('/home/srujana/VSCode Projects/Thesis/vectorHASH-cont-jax/g2g_space.npy')
-    scaffold = Scaffold(400, lambdas, 'glob_inh', gamma=0.6, gg_default=False, W_gg=gg[40, 40, :, :])
+    scaffold = Scaffold(400, lambdas, 'sigmoid', gamma=0.6, gg_default=False, W_gg=gg[5, 8, :, :])
     h0 = scaffold.hc
     g0 = jnp.zeros_like(scaffold.grid)
     final = scaffold.run(g0, h0)
 
-    n_correct = sum(np.allclose(final[0][:, p], scaffold.grid[:, p], atol=1e-1) for p in range(3600))
+    g_err = np.max(np.abs(final[0] - scaffold.grid), axis=0)
+    frac_grid_sig = np.mean(g_err < 0.1, axis=-1)
+    #n_correct = sum(np.allclose(final[0][:, p], scaffold.grid[:, p], atol=1e-1) for p in range(3600))
     """plt.imshow(n_correct, aspect='auto')
     plt.colorbar()
     plt.show()"""
-    print(n_correct)
+    print(frac_grid_sig)
     print(final[0][:,0])
-    print(gg[40, 40, :, :])
+    print(gg[20, 6, :, :])
     
 
 """    mean_hc_norm = np.mean(np.linalg.norm(h0, axis=0))
