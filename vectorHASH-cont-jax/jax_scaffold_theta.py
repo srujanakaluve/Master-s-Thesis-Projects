@@ -122,6 +122,38 @@ class Scaffold:
 
     @staticmethod
     @partial(jax.jit, static_argnames=('lambdas', 'activation', 'n_steps'))
+    def simulate_run_traj(g0, h0, weights, lambdas, b, tau_g, tau_h, activation,
+                        dt=0.1, freq=0.0, duty=0.5, phase=0.0, n_steps=250):
+        state0 = (g0, h0)
+
+        def rk4_step(state, step):
+            g, h = state
+            t = step * dt
+
+            def derivative(g_t, h_t, t_t):
+                theta_h = Scaffold.square_wave(t_t, freq, duty, phase)
+                dg = (-g_t + activation(weights['W_gg'] @ g_t + theta_h * weights['W_gh'] @ h_t, lambdas)) / tau_g
+                dh = (-h_t + jax.nn.relu(weights['W_hg'] @ g_t - b)) / tau_h
+                return dg, dh
+
+            dg1, dh1 = derivative(g, h, t)
+            dg2, dh2 = derivative(g + 0.5*dt*dg1, h + 0.5*dt*dh1, t + 0.5*dt)
+            dg3, dh3 = derivative(g + 0.5*dt*dg2, h + 0.5*dt*dh2, t + 0.5*dt)
+            dg4, dh4 = derivative(g + dt*dg3, h + dt*dh3, t + dt)
+            g_next = g + (dt/6.0)*(dg1 + 2*dg2 + 2*dg3 + dg4)
+            h_next = h + (dt/6.0)*(dh1 + 2*dh2 + 2*dh3 + dh4)
+
+            # carry moves the sim forward; the second element becomes the per-step output ("ys")
+            return (g_next, h_next), (g_next, h_next)
+
+        final_state, (g_traj, h_traj) = jax.lax.scan(
+            rk4_step, state0, jnp.arange(n_steps), length=n_steps
+        )
+        # g_traj: (n_steps, *g0.shape), h_traj: (n_steps, *h0.shape)
+        return g_traj, h_traj
+    
+    @staticmethod
+    @partial(jax.jit, static_argnames=('lambdas', 'activation', 'n_steps'))
     def simulate_run_sampled(g0, h0, weights, lambdas, b, tau_g, tau_h, activation,
                             dt=0.1, freq=0.0, duty=0.5, phase=0.0, n_steps=250):
         sample_step = compute_sample_step(freq, duty, phase, dt, n_steps)
@@ -151,7 +183,7 @@ class Scaffold:
 
             return (g_next, h_next, g_sampled, h_sampled), None
 
-        # scan still returns the full carry internally — we just only keep what we want
+        # scan still returns the full carry but we only keep what we want
         (_, _, g_sampled, h_sampled), _ = jax.lax.scan(
             rk4_step, state0, jnp.arange(n_steps), length=n_steps
         )
@@ -178,20 +210,31 @@ if __name__ == "__main__":
 
 
     lambdas = np.array([3,4,5])
-    gg = np.load('/home/srujana/VSCode Projects/Thesis/vectorHASH-cont-jax/g2g_space.npy')
+    #gg = np.load('/home/srujana/VSCode Projects/Thesis/vectorHASH-cont-jax/g2g_space.npy')
     scaffold = Scaffold(400, lambdas, 'sigmoid', gg_exc=1, gg_inh=-5, gamma=0.6, freq=0.2, duty=0.4)
     h0 = scaffold.hc
     g0 = jnp.zeros_like(scaffold.grid)
-    g, h = scaffold.run_and_sample(g0, h0, scaffold.freq, scaffold.duty)
+    patt = 5
 
-    g_err = np.max(np.abs(g - scaffold.grid), axis=0)
+    g_traj, _ = Scaffold.simulate_run_traj(g0[:, patt:patt+1], h0[:, patt:patt+1],
+                                                scaffold.weights, scaffold.lambdas, scaffold.b, scaffold.tau_g, scaffold.tau_h,
+                                                sigmoid, dt=scaffold.dt, freq=1/5, duty=0.8, phase=0.0, n_steps=250,
+                                                )
+    fig, ax = plt.subplots(figsize=(6, 4))
+    im = ax.imshow(np.asarray(g_traj[:, :, 0]).T, aspect='auto', origin='upper', cmap='viridis', vmin=0, vmax=1)
+    ax.set_xlabel('time step')
+    ax.set_ylabel('grid unit')
+    ax.set_title(f'grid trajectory, pattern {patt}')
+    fig.colorbar(im, label='activation')
+    plt.show()
+
+    g_err = np.max(np.abs(g_traj[-1, :] - scaffold.grid[:, patt]), axis=0)
     frac_grid_sig = np.mean(g_err < 0.2, axis=-1)
     #n_correct = sum(np.allclose(final[0][:, p], scaffold.grid[:, p], atol=1e-1) for p in range(3600))
     #plt.imshow(n_correct, aspect='auto')
     #plt.colorbar()
     #plt.show()
     print(frac_grid_sig)
-    print(g[:,0])
+    #print(g[:,0])
     print(np.max(np.abs(g[:, 0] - scaffold.grid[:, 0])) < 0.2)
     #print(gg[20, 6, :, :])
-    

@@ -84,6 +84,28 @@ class Grid:
         final_state, _ = jax.lax.scan(rk4_step, state0, None, length=500)
         return final_state
 
+    @staticmethod
+    @partial(jax.jit, static_argnames=("lambdas", "activation"))
+    def simulate_run_traj(g0, weights, lambdas, tau_g, activation, dt=0.1):
+        state0 = (g0)
+
+        def rk4_step(state, step):
+            g = state
+
+            def derivative(g_t):
+                dg = (-g_t + activation(weights['W_gg'] @ g_t, lambdas)) / tau_g
+                return dg
+
+            dg1 = derivative(g)
+            dg2 = derivative(g + 0.5 * dt * dg1)
+            dg3 = derivative(g + 0.5 * dt * dg2)
+            dg4 = derivative(g + dt * dg3)
+            g_next = g + (dt / 6.0) * (dg1 + 2*dg2 + 2*dg3 + dg4)
+            return g_next, g_next
+
+        final_state, g_traj = jax.lax.scan(rk4_step, state0, None, length=500)
+        return g_traj
+
     def run(self, g0):
             return self.simulate_run(jnp.array(g0), self.weights, self.lambdas, self.tau_g, self.activation, dt=self.dt)
 
@@ -95,12 +117,20 @@ if __name__ == "__main__":
     lambdas = np.array([3,4,5])
     scaffold = Grid(lambdas, 'sigmoid', 4, -1)
     g0 = scaffold.grid
-    exc_range = np.arange(0, 101)
-    inh_range = np.arange(0, -101, -1)
+    #exc_range = np.arange(0, 101)
+    #inh_range = np.arange(0, -101, -1)
 
     #wggs = gg_space(scaffold.Ng, lambdas, exc_range, inh_range, 'g2g_space.npy')
-    final = scaffold.run(g0)
+    g_traj = scaffold.simulate_run_traj(g0, scaffold.weights, scaffold.lambdas, scaffold.tau_g, scaffold.activation, scaffold.dt)
 
-    n_correct = sum(np.allclose(final[:, p], g0[:, p], atol=1e-1) for p in range(3600))
+    n_correct = sum(np.allclose(g_traj[-1:, :, p], g0[:, p], atol=1e-1) for p in range(3600))
     print(n_correct)
-    print(final[:,0])
+
+    patt = 0
+    fig, ax = plt.subplots(figsize=(6, 4))
+    im = ax.imshow(np.asarray(g_traj[:, :, patt]).T, aspect='auto', origin='upper', cmap='plasma', vmin=0, vmax=1)
+    ax.set_xlabel('time step')
+    ax.set_ylabel('grid unit')
+    ax.set_title(f'grid trajectory, pattern {patt}')
+    fig.colorbar(im, label='activation')
+    plt.show()
