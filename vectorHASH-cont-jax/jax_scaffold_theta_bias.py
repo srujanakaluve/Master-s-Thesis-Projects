@@ -23,17 +23,16 @@ def compute_sample_step(freq, duty, phase, dt, n_steps, safety_steps=1):
 def time_averaged_activation(traj, steps_after):
     return jnp.mean(traj[steps_after:], axis=0)
 
-class Scaffold_theta:
+class Scaffold_theta_bias:
     """
-    Scaffold with multiplicative theta waves. Frequency, duty and phase are passed as tuples with order (theta_h, theta_g).
-    theta_h is in the equation for the grid layer and signifies theta-modulated h input. theta_g is the theta-modulated g input and is in the hc layer equation.
+    Scaffold with theta waves as bias (subthreshold gating). Frequency, duty and phase are passed as tuples with order (theta_h, theta_g).
+    theta_h is in the equation for the hc layer and theta_g is the grid layer equation.
 
     if you want only one theta term (the other is always ON), set the duty cycle of the other term to 1.0 with any arbitrary frquency or phase. 
-    Setting duty of both to 1.0 reduces this to the simple case without theta waves.
-    Setting duty of both to 0.0 makes the layers independent and allows you to look at just the grid/hc dynamics.
+    Setting duty of both to 0.0 reduces this to the simple case without theta waves.
     """
 
-    def __init__(self, Nh, lambdas, activation, gg_exc=None, gg_inh=None, gamma=0, b=0.5,
+    def __init__(self, Nh, lambdas, activation, gg_exc=None, gg_inh=None, gamma=0,
                  tau_g=1., tau_h=1., dt=0.1, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), gg_default=True, W_gg=None, seed=None):
         
         self.lambdas = tuple(int(l) for l in lambdas)
@@ -41,7 +40,7 @@ class Scaffold_theta:
         self.patts_total = np.prod([l * l for l in self.lambdas])
         if gg_exc is not None and gg_inh is not None:
             self.gg_exc, self.gg_inh = gg_exc, gg_inh
-        self.b = b
+        #self.b = b
         self.gamma = gamma
         self.tau_g, self.tau_h = tau_g, tau_h
         self.dt = dt
@@ -97,7 +96,7 @@ class Scaffold_theta:
             b = self.rng.integers(0, self.Ng, size=prune)
             W_hg[a, b] = 0
         grid = self.generate_grid()
-        hc = jax.nn.relu(W_hg @ grid - self.b)
+        hc = jax.nn.relu(W_hg @ grid)
         W_gh = (1 / self.patts_total) * (grid @ hc.T)
         return grid, W_hg, hc, W_gh
 
@@ -108,7 +107,7 @@ class Scaffold_theta:
 
     @staticmethod
     @partial(jax.jit, static_argnames=('lambdas', 'activation'))
-    def simulate_run(g0, h0, weights, lambdas, b, tau_g, tau_h, activation,
+    def simulate_run(g0, h0, weights, lambdas, tau_g, tau_h, activation,
                      dt=0.1, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0)):
         
         freq_h, freq_g = freq
@@ -122,12 +121,10 @@ class Scaffold_theta:
             t = step * dt
 
             def derivative(g_t, h_t, t_t):
-                theta_h = Scaffold_theta.square_wave(t_t, freq_h, duty_h, phase_h)
-                theta_g = Scaffold_theta.square_wave(t_t, freq_g, duty_g, phase_g)
-                dg = (-g_t + activation(
-                    weights['W_gg'] @ g_t + theta_h * weights['W_gh'] @ h_t,
-                    lambdas)) / tau_g
-                dh = (-h_t + theta_g * jax.nn.relu(weights['W_hg'] @ g_t - b)) / tau_h
+                theta_h = Scaffold_theta_bias.square_wave(t_t, freq_h, duty_h, phase_h)
+                theta_g = Scaffold_theta_bias.square_wave(t_t, freq_g, duty_g, phase_g)
+                dg = (-g_t + activation(weights['W_gg'] @ g_t +  weights['W_gh'] @ h_t - theta_h, lambdas)) / tau_g
+                dh = (-h_t + jax.nn.relu(weights['W_hg'] @ g_t - theta_g)) / tau_h
                 return dg, dh
 
             dg1, dh1 = derivative(g, h, t)
@@ -143,7 +140,7 @@ class Scaffold_theta:
 
     @staticmethod
     @partial(jax.jit, static_argnames=('lambdas', 'activation', 'n_steps'))
-    def simulate_run_traj(g0, h0, weights, lambdas, b, tau_g, tau_h, activation,
+    def simulate_run_traj(g0, h0, weights, lambdas, tau_g, tau_h, activation,
                         dt=0.1, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), n_steps=250):
         freq_h, freq_g = freq
         duty_h, duty_g = duty
@@ -156,10 +153,10 @@ class Scaffold_theta:
             t = step * dt
 
             def derivative(g_t, h_t, t_t):
-                theta_h = Scaffold_theta.square_wave(t_t, freq_h, duty_h, phase_h)
-                theta_g = Scaffold_theta.square_wave(t_t, freq_g, duty_g, phase_g)
-                dg = (-g_t + activation(weights['W_gg'] @ g_t + theta_h * weights['W_gh'] @ h_t, lambdas)) / tau_g
-                dh = (-h_t + theta_g * jax.nn.relu(weights['W_hg'] @ g_t - b)) / tau_h
+                theta_h = Scaffold_theta_bias.square_wave(t_t, freq_h, duty_h, phase_h)
+                theta_g = Scaffold_theta_bias.square_wave(t_t, freq_g, duty_g, phase_g)
+                dg = (-g_t + activation(weights['W_gg'] @ g_t +  weights['W_gh'] @ h_t - theta_h, lambdas)) / tau_g
+                dh = (-h_t + jax.nn.relu(weights['W_hg'] @ g_t - theta_g)) / tau_h
                 return dg, dh
 
             dg1, dh1 = derivative(g, h, t)
@@ -180,7 +177,7 @@ class Scaffold_theta:
     
     @staticmethod
     @partial(jax.jit, static_argnames=('lambdas', 'activation', 'n_steps'))
-    def simulate_run_sampled(g0, h0, weights, lambdas, b, tau_g, tau_h, activation,
+    def simulate_run_sampled(g0, h0, weights, lambdas, tau_g, tau_h, activation,
                             dt=0.1, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), n_steps=250):
         freq_h, freq_g = freq
         duty_h, duty_g = duty
@@ -196,10 +193,10 @@ class Scaffold_theta:
             t = step * dt
 
             def derivative(g_t, h_t, t_t):
-                theta_h = Scaffold_theta.square_wave(t_t, freq_h, duty_h, phase_h)
-                theta_g = Scaffold_theta.square_wave(t_t, freq_g, duty_g, phase_g)
-                dg = (-g_t + activation(weights['W_gg'] @ g_t + theta_h * weights['W_gh'] @ h_t, lambdas)) / tau_g
-                dh = (-h_t + theta_g * jax.nn.relu(weights['W_hg'] @ g_t - b)) / tau_h
+                theta_h = Scaffold_theta_bias.square_wave(t_t, freq_h, duty_h, phase_h)
+                theta_g = Scaffold_theta_bias.square_wave(t_t, freq_g, duty_g, phase_g)
+                dg = (-g_t + activation(weights['W_gg'] @ g_t +  weights['W_gh'] @ h_t - theta_h, lambdas)) / tau_g
+                dh = (-h_t + jax.nn.relu(weights['W_hg'] @ g_t - theta_g)) / tau_h
                 return dg, dh
 
             dg1, dh1 = derivative(g, h, t)
@@ -238,12 +235,12 @@ class Scaffold_theta:
         return g_sampled, h_sampled
 
     @staticmethod
-    def run_and_score(g0, h0, weights, lambdas, b, tau_g, tau_h, activation, dt,
+    def run_and_score(g0, h0, weights, lambdas, tau_g, tau_h, activation, dt,
                   freq, duty, phase, n_steps, g_target, h_target, h_target_norm,
                   grid_thresh, hc_thresh):
         """ this is a static method so that it can be JIT compiled and be used for jax.vmap. """
 
-        g_s, h_s = Scaffold_theta.simulate_run_sampled(
+        g_s, h_s = Scaffold_theta_bias.simulate_run_sampled(
             g0, h0, weights, lambdas, b, tau_g, tau_h, activation,
             dt=dt, freq=freq, duty=duty, phase=phase, n_steps=n_steps,
         )
@@ -254,10 +251,10 @@ class Scaffold_theta:
         return frac_grid, frac_hc
 
     @staticmethod
-    def run_and_score_avg(g0, h0, weights, lambdas, b, tau_g, tau_h, activation, dt,
+    def run_and_score_avg(g0, h0, weights, lambdas, tau_g, tau_h, activation, dt,
                        freq, duty, phase, n_steps, steps_after,
                        g_target, h_target, h_target_norm, grid_thresh, hc_thresh):
-        g_traj, h_traj = Scaffold_theta.simulate_run_traj(g0, h0, weights, lambdas, b, tau_g, tau_h,
+        g_traj, h_traj = Scaffold_theta_bias.simulate_run_traj(g0, h0, weights, lambdas, b, tau_g, tau_h,
                                                     activation, dt=dt, freq=freq, duty=duty,
                                                     phase=phase, n_steps=n_steps)
         g_avg = time_averaged_activation(g_traj, steps_after)
@@ -273,32 +270,38 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     freq, duty, phase = (0.5, 1.0), (0.5, 1.0), (0.5, 0.5)
 
+    """
     t = np.arange(0, 10, 0.05)
-    plt.plot(t, Scaffold_theta.square_wave(t, freq[0], duty[0], phase[0]), label='theta_h') #grid
-    plt.plot(t, Scaffold_theta.square_wave(t, freq[1], duty[1], phase[1]), label='theta_g')  #hc
+    plt.plot(t, Scaffold_theta_bias.square_wave(t, freq[0], duty[0], phase[0]), label='theta_h') #grid
+    plt.plot(t, Scaffold_theta_bias.square_wave(t, freq[1], duty[1], phase[1]), label='theta_g')  #hc
     plt.legend()
     plt.show()
+    """
 
-    """lambdas = np.array([3,4,5])
+    #"""
+    lambdas = np.array([3,4,5])
     #gg = np.load('/home/srujana/VSCode Projects/Thesis/vectorHASH-cont-jax/g2g_space.npy')
-    scaffold = Scaffold_theta(400, lambdas, 'sigmoid', gg_exc=1, gg_inh=-5, gamma=0.6, freq=0.2, duty=0.4)
+    scaffold = Scaffold_theta_bias(400, lambdas, 'sigmoid', gg_exc=5, gg_inh=-8.75, gamma=0.6, freq=freq, duty=duty, phase=phase, seed=0)
     h0 = scaffold.hc
     g0 = jnp.zeros_like(scaffold.grid)
-    patt = 5
 
-    g_traj, _ = Scaffold_theta.simulate_run_traj(g0[:, patt:patt+1], h0[:, patt:patt+1],
-                                                scaffold.weights, scaffold.lambdas, scaffold.b, scaffold.tau_g, scaffold.tau_h,
-                                                sigmoid, dt=scaffold.dt, freq=1/5, duty=0.8, phase=0.0, n_steps=250,
+
+    g_traj, _ = Scaffold_theta_bias.simulate_run_traj(g0, h0,
+                                                scaffold.weights, scaffold.lambdas, scaffold.tau_g, scaffold.tau_h,
+                                                sigmoid, dt=scaffold.dt, freq=scaffold.freq, duty=scaffold.duty, phase=scaffold.phase, n_steps=250,
                                                 )
+    
+    patt = 5
     fig, ax = plt.subplots(figsize=(6, 4))
-    im = ax.imshow(np.asarray(g_traj[:, :, 0]).T, aspect='auto', origin='upper', cmap='viridis', vmin=0, vmax=1)
+    im = ax.imshow(np.asarray(g_traj[:, :, patt]).T, aspect='auto', origin='upper', cmap='viridis', vmin=0, vmax=1)
     ax.set_xlabel('time step')
     ax.set_ylabel('grid unit')
     ax.set_title(f'grid trajectory, pattern {patt}')
     fig.colorbar(im, label='activation')
     plt.show()
 
-    g_err = np.max(np.abs(g_traj[-1, :] - scaffold.grid[:, patt]), axis=0)
+    """
+    g_err = np.max(np.abs(g_traj[-1, :, :] - scaffold.grid[:, patt]), axis=0)
     frac_grid_sig = np.mean(g_err < 0.2, axis=-1)
     #n_correct = sum(np.allclose(final[0][:, p], scaffold.grid[:, p], atol=1e-1) for p in range(3600))
     #plt.imshow(n_correct, aspect='auto')
@@ -306,5 +309,6 @@ if __name__ == "__main__":
     #plt.show()
     print(frac_grid_sig)
     #print(g[:,0])
-    print(np.max(np.abs(g[:, 0] - scaffold.grid[:, 0])) < 0.2)"""
+    print(np.max(np.abs(g[:, 0] - scaffold.grid[:, 0])) < 0.2)
+    """
     #print(gg[20, 6, :, :])
