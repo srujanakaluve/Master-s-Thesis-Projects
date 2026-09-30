@@ -34,7 +34,7 @@ class Scaffold_theta:
     """
 
     def __init__(self, Nh, lambdas, activation, gg_exc=None, gg_inh=None, gamma=0, b=0.5,
-                 tau_g=1., tau_h=1., dt=0.1, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), gg_default=True, W_gg=None, seed=None):
+                 tau_g=1., tau_h=1., dt=0.01, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), gg_default=True, W_gg=None, seed=None):
         
         self.lambdas = tuple(int(l) for l in lambdas)
         self.Ng, self.Nh = sum(l * l for l in self.lambdas), Nh
@@ -109,7 +109,7 @@ class Scaffold_theta:
     @staticmethod
     @partial(jax.jit, static_argnames=('lambdas', 'activation'))
     def simulate_run(g0, h0, weights, lambdas, b, tau_g, tau_h, activation,
-                     dt=0.1, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0)):
+                     dt=0.01, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0)):
         
         freq_h, freq_g = freq
         duty_h, duty_g = duty
@@ -138,13 +138,13 @@ class Scaffold_theta:
             h_next = h + (dt / 6.0) * (dh1 + 2 * dh2 + 2 * dh3 + dh4)
             return (g_next, h_next), None
 
-        final_state, _ = jax.lax.scan(rk4_step, state0, jnp.arange(250))
+        final_state, _ = jax.lax.scan(rk4_step, state0, jnp.arange(1000))
         return final_state
 
     @staticmethod
     @partial(jax.jit, static_argnames=('lambdas', 'activation', 'n_steps'))
     def simulate_run_traj(g0, h0, weights, lambdas, b, tau_g, tau_h, activation,
-                        dt=0.1, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), n_steps=250):
+                        dt=0.01, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), n_steps=1000):
         freq_h, freq_g = freq
         duty_h, duty_g = duty
         phase_h, phase_g = phase
@@ -181,7 +181,7 @@ class Scaffold_theta:
     @staticmethod
     @partial(jax.jit, static_argnames=('lambdas', 'activation', 'n_steps'))
     def simulate_run_sampled(g0, h0, weights, lambdas, b, tau_g, tau_h, activation,
-                            dt=0.1, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), n_steps=250):
+                            dt=0.01, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), n_steps=1000):
         freq_h, freq_g = freq
         duty_h, duty_g = duty
         phase_h, phase_g = phase
@@ -218,7 +218,7 @@ class Scaffold_theta:
 
         # scan still returns the full carry but we only keep what we want
         (_, _, g_sampled, h_sampled), _ = jax.lax.scan(
-            rk4_step, state0, jnp.arange(n_steps), length=n_steps
+            rk4_step, state0, jnp.arange(n_steps), length=n_steps, unroll=4
         )
         return g_sampled, h_sampled
 

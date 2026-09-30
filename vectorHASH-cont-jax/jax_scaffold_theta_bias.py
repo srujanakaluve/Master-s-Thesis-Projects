@@ -33,7 +33,7 @@ class Scaffold_theta_bias:
     """
 
     def __init__(self, Nh, lambdas, activation, gg_exc=None, gg_inh=None, gamma=0,
-                 tau_g=1., tau_h=1., dt=0.1, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), gg_default=True, W_gg=None, seed=None):
+                 tau_g=1., tau_h=1., dt=0.01, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), gg_default=True, W_gg=None, seed=None):
         
         self.lambdas = tuple(int(l) for l in lambdas)
         self.Ng, self.Nh = sum(l * l for l in self.lambdas), Nh
@@ -103,12 +103,12 @@ class Scaffold_theta_bias:
     @staticmethod
     def square_wave(t, freq, duty, phase):
         cycle_position = jnp.mod(freq * t - phase, 1.0)
-        return jnp.where(cycle_position < duty, 1.0, -1.0)
+        return jnp.where(cycle_position < duty, 1.0, 0.0)
 
     @staticmethod
     @partial(jax.jit, static_argnames=('lambdas', 'activation'))
     def simulate_run(g0, h0, weights, lambdas, tau_g, tau_h, activation,
-                     dt=0.1, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0)):
+                     dt=0.01, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0)):
         
         freq_h, freq_g = freq
         duty_h, duty_g = duty
@@ -135,13 +135,13 @@ class Scaffold_theta_bias:
             h_next = h + (dt / 6.0) * (dh1 + 2 * dh2 + 2 * dh3 + dh4)
             return (g_next, h_next), None
 
-        final_state, _ = jax.lax.scan(rk4_step, state0, jnp.arange(250))
+        final_state, _ = jax.lax.scan(rk4_step, state0, jnp.arange(1000))
         return final_state
 
     @staticmethod
     @partial(jax.jit, static_argnames=('lambdas', 'activation', 'n_steps'))
     def simulate_run_traj(g0, h0, weights, lambdas, tau_g, tau_h, activation,
-                        dt=0.1, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), n_steps=250):
+                        dt=0.01, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), n_steps=1000):
         freq_h, freq_g = freq
         duty_h, duty_g = duty
         phase_h, phase_g = phase
@@ -178,7 +178,7 @@ class Scaffold_theta_bias:
     @staticmethod
     @partial(jax.jit, static_argnames=('lambdas', 'activation', 'n_steps'))
     def simulate_run_sampled(g0, h0, weights, lambdas, tau_g, tau_h, activation,
-                            dt=0.1, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), n_steps=250):
+                            dt=0.01, freq=(0.1, 0.1), duty=(0.5, 0.5), phase=(0.0, 0.0), n_steps=1000):
         freq_h, freq_g = freq
         duty_h, duty_g = duty
         phase_h, phase_g = phase
@@ -222,14 +222,14 @@ class Scaffold_theta_bias:
     def run(self, g0, h0, freq, duty, phase):
         return self.simulate_run(
             jnp.asarray(g0), jnp.asarray(h0), self.weights, self.lambdas,
-            self.b, self.tau_g, self.tau_h, self.activation, dt=self.dt,
+            self.tau_g, self.tau_h, self.activation, dt=self.dt,
             freq=freq, duty=duty, phase=phase,
         )
 
     def run_and_sample(self, g0, h0, freq, duty, phase):
         g_sampled, h_sampled = self.simulate_run_sampled(
             jnp.asarray(g0), jnp.asarray(h0), self.weights, self.lambdas,
-            self.b, self.tau_g, self.tau_h, self.activation, dt=self.dt,
+            self.tau_g, self.tau_h, self.activation, dt=self.dt,
             freq=freq, duty=duty, phase=phase,
         )
         return g_sampled, h_sampled
@@ -241,7 +241,7 @@ class Scaffold_theta_bias:
         """ this is a static method so that it can be JIT compiled and be used for jax.vmap. """
 
         g_s, h_s = Scaffold_theta_bias.simulate_run_sampled(
-            g0, h0, weights, lambdas, b, tau_g, tau_h, activation,
+            g0, h0, weights, lambdas, tau_g, tau_h, activation,
             dt=dt, freq=freq, duty=duty, phase=phase, n_steps=n_steps,
         )
         grid_err = jnp.max(jnp.abs(g_s - g_target), axis=0)              # (patts,)
@@ -254,7 +254,7 @@ class Scaffold_theta_bias:
     def run_and_score_avg(g0, h0, weights, lambdas, tau_g, tau_h, activation, dt,
                        freq, duty, phase, n_steps, steps_after,
                        g_target, h_target, h_target_norm, grid_thresh, hc_thresh):
-        g_traj, h_traj = Scaffold_theta_bias.simulate_run_traj(g0, h0, weights, lambdas, b, tau_g, tau_h,
+        g_traj, h_traj = Scaffold_theta_bias.simulate_run_traj(g0, h0, weights, lambdas, tau_g, tau_h,
                                                     activation, dt=dt, freq=freq, duty=duty,
                                                     phase=phase, n_steps=n_steps)
         g_avg = time_averaged_activation(g_traj, steps_after)

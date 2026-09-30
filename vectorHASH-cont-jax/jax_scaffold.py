@@ -7,7 +7,7 @@ from jax_helpers import sigmoid, glob_inh, softmax
 class Scaffold:
 
     def __init__(self, Nh, lambdas, activation, gg_exc=None, gg_inh=None, gamma=0, b=0.5,
-                 tau_g=1., tau_h=1., dt=0.1, gg_default=True, W_gg=None):
+                 tau_g=1., tau_h=1., dt=0.01, gg_default=True, W_gg=None):
         self.lambdas = tuple(int(l) for l in lambdas)
         self.Ng, self.Nh = sum(l * l for l in self.lambdas), Nh
         self.patts_total = np.prod([l * l for l in self.lambdas])
@@ -88,7 +88,7 @@ class Scaffold:
 
     @staticmethod
     @partial(jax.jit, static_argnames=("lambdas", "activation"))
-    def simulate_run(g0, h0, weights, lambdas, b, tau_g, tau_h, activation, dt=0.1):
+    def simulate_run(g0, h0, weights, lambdas, b, tau_g, tau_h, activation, dt=0.01):
         state0 = (g0, h0)
 
         def rk4_step(state, _):
@@ -108,13 +108,13 @@ class Scaffold:
 
             return(g_next, h_next), None
 
-        final_state, _ = jax.lax.scan(rk4_step, state0, None, length=250)
+        final_state, _ = jax.lax.scan(rk4_step, state0, None, length=1000)
         return final_state
 
     @staticmethod
     @partial(jax.jit, static_argnames=('lambdas', 'activation'))
     def simulate_run_sampled(g0, h0, weights, lambdas, b, tau_g, tau_h, activation,
-                            dt=0.1):
+                            dt=0.01):
 
         state0 = (g0, h0)  
 
@@ -137,7 +137,7 @@ class Scaffold:
             return (g_next, h_next), (g_next, h_next)
         
         # scan still returns the full carry but we only keep what we want
-        (g_final, h_final), (g_traj, h_traj) = jax.lax.scan(rk4_step, state0, None, length=500)
+        (g_final, h_final), (g_traj, h_traj) = jax.lax.scan(rk4_step, state0, None, length=1000)
         return g_traj, h_traj
 
     def run(self, g0, h0):
@@ -161,9 +161,13 @@ if __name__ == "__main__":
     g0 = jnp.zeros_like(scaffold.grid)
     patt = 0
 
-    g_traj, _ = scaffold.simulate_run_sampled(g0[:, patt:patt+1], h0[:, patt:patt+1], scaffold.weights,
+    g_traj, _ = scaffold.simulate_run_sampled(g0, h0, scaffold.weights,
                                           scaffold.lambdas, scaffold.b, scaffold.tau_g, scaffold.tau_h,
-                                          scaffold.activation)
+                                          scaffold.activation, dt=0.01)
+
+    g_err = np.max(np.abs(g_traj[-1, :, :] - scaffold.grid), axis=0)
+    frac_grid_sig = np.mean(g_err < 0.2, axis=-1)
+    print(frac_grid_sig)
     
     fig, ax = plt.subplots(figsize=(6, 4))
     im = ax.imshow(np.asarray(g_traj[:, :, 0]).T, aspect='auto', origin='upper', cmap='viridis', vmin=0, vmax=1)
@@ -173,13 +177,11 @@ if __name__ == "__main__":
     fig.colorbar(im, label='activation')
     plt.show()
 
-    g_err = np.max(np.abs(g_traj[-1, :] - scaffold.grid[:, patt]), axis=0)
-    frac_grid_sig = np.mean(g_err < 0.2, axis=-1)
     #n_correct = sum(np.allclose(final[0][:, p], scaffold.grid[:, p], atol=1e-1) for p in range(3600))
     """plt.imshow(n_correct, aspect='auto')
     plt.colorbar()
     plt.show()"""
-    print(frac_grid_sig)
+    
     #print(final[0][:,0])
     #print(gg[20, 6, :, :])
     

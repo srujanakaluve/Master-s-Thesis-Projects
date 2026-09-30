@@ -7,7 +7,7 @@ from jax_helpers import sigmoid, glob_inh, softmax
 class Grid:
 
     def __init__(self, lambdas, activation, gg_exc=None, gg_inh=None,
-                 tau_g=1., dt=0.1, gg_default=True, W_gg=None):
+                 tau_g=1., dt=0.01, gg_default=True, W_gg=None):
         self.lambdas = tuple(int(l) for l in lambdas)
         self.Ng = sum(l * l for l in self.lambdas)
         self.patts_total = np.prod([l * l for l in self.lambdas])
@@ -81,7 +81,7 @@ class Grid:
             g_next = g + (dt / 6.0) * (dg1 + 2*dg2 + 2*dg3 + dg4)
             return g_next, None
 
-        final_state, _ = jax.lax.scan(rk4_step, state0, None, length=500)
+        final_state, _ = jax.lax.scan(rk4_step, state0, None, length=1000)
         return final_state
 
     @staticmethod
@@ -103,7 +103,7 @@ class Grid:
             g_next = g + (dt / 6.0) * (dg1 + 2*dg2 + 2*dg3 + dg4)
             return g_next, g_next
 
-        final_state, g_traj = jax.lax.scan(rk4_step, state0, None, length=500)
+        final_state, g_traj = jax.lax.scan(rk4_step, state0, None, length=1000)
         return g_traj
 
     def run(self, g0):
